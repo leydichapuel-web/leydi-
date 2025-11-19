@@ -491,35 +491,62 @@ def simular_columna_destilacion():
     recovery_benzene_real = (D_benzene_real / F[0]) * 100
     recovery_ethylbenzene_real = (D_ethylbenzene_real / F[1]) * 100
     
-    # Mostrar número de iteraciones
+    # Imprimir resultados en formato de columnas
+    print("\n" + "=" * 80)
+    print("RESULTADOS DE LA SIMULACIÓN")
+    print("=" * 80)
+    
     print(f"\nNúmero de iteraciones: {num_iteraciones}")
     
-    # Mostrar resultados en el formato solicitado
-    print(f"\nD (kmol/h) = {U1:.6f}")
-    print(f"Composición destilado y_D:")
-    print(f"Bz = {x_stages[0][0]:.8f}")
-    print(f"Et = {x_stages[0][1]:.8f}")
-    print(f"DiEt = {x_stages[0][2]:.8f}")
+    # FLUJOS
+    print(f"\n{'FLUJOS TOTALES':-^80}")
+    print(f"\n{'Corriente':<30} {'Valor (kmol/h)':<20}")
+    print("-" * 50)
+    print(f"{'D (Destilado)':<30} {U1:>19.6f}")
+    print(f"{'B (Fondos)':<30} {L_stages[-1]:>19.6f}")
     
-    print(f"\nB (kmol/h) = {L_stages[-1]:.6f}")
-    print(f"Composición fondos x_B:")
-    print(f"Bz = {x_stages[-1][0]:.8f}")
-    print(f"Et = {x_stages[-1][1]:.8f}")
-    print(f"DiEt = {x_stages[-1][2]:.8f}")
+    # COMPOSICIONES
+    print(f"\n{'COMPOSICIONES (FRACCIÓN MOLAR)':-^80}")
+    print(f"\n{'Componente':<25} {'Destilado (y_D)':<25} {'Fondos (x_B)':<25}")
+    print("-" * 75)
+    print(f"{'Bz (Benceno)':<25} {x_stages[0][0]:>24.8f} {x_stages[-1][0]:>24.8f}")
+    print(f"{'Et (Etilbenceno)':<25} {x_stages[0][1]:>24.8f} {x_stages[-1][1]:>24.8f}")
+    print(f"{'DiEt (1,4-Dietilbenceno)':<25} {x_stages[0][2]:>24.8f} {x_stages[-1][2]:>24.8f}")
+    print("-" * 75)
+    print(f"{'SUMA':<25} {np.sum(x_stages[0]):>24.8f} {np.sum(x_stages[-1]):>24.8f}")
     
-    print(f"\nRecuperación benceno = {recovery_benzene_real:.4f}%")
-    print(f"Recuperación Etilbenceno = {recovery_ethylbenzene_real:.4f}%")
+    # RECUPERACIONES
+    print(f"\n{'RECUPERACIONES':-^80}")
+    print(f"\n{'Componente':<40} {'Recuperación (%)':<20}")
+    print("-" * 60)
+    print(f"{'Benceno en destilado':<40} {recovery_benzene_real:>19.4f}")
+    print(f"{'Etilbenceno en destilado':<40} {recovery_ethylbenzene_real:>19.4f}")
     
-    # Balance de materia
-    print(f"\nBalance de materia:")
+    # BALANCE DE MATERIA
+    print(f"\n{'BALANCE DE MATERIA':-^80}")
+    print(f"\n{'Componente':<20} {'Entrada':<15} {'Destilado':<15} {'Fondos':<15} {'Error':<15}")
+    print("-" * 80)
+    
     for i, comp_name in enumerate(["Benceno", "Etilbenceno", "1,4-Dietilbenceno"]):
         F_comp = F[i]
         D_comp = U1 * x_stages[0][i]
         B_comp = L_stages[-1] * x_stages[-1][i]
         error = F_comp - (D_comp + B_comp)
-        print(f"{comp_name}: Entrada={F_comp:.6f}, Salida={D_comp+B_comp:.6f}, Error={error:.8f}")
+        print(f"{comp_name:<20} {F_comp:>14.6f} {D_comp:>14.6f} {B_comp:>14.6f} {error:>14.8f}")
     
-    print("\nSimulación completada.")
+    F_total_check = np.sum(F)
+    D_total_check = U1
+    B_total_check = L_stages[-1]
+    error_total = F_total_check - (D_total_check + B_total_check)
+    print("-" * 80)
+    print(f"{'TOTAL':<20} {F_total_check:>14.6f} {D_total_check:>14.6f} {B_total_check:>14.6f} {error_total:>14.8f}")
+    
+    error_pct_total = abs(error_total / F_total_check) * 100
+    print(f"\nError relativo total: {error_pct_total:.6f}%")
+    
+    print("\n" + "=" * 80)
+    print("SIMULACIÓN COMPLETADA")
+    print("=" * 80)
 
 
 # ============================================================================
