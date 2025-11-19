@@ -3,12 +3,13 @@ Simulación de Columna de Destilación con Modelo UNIFAC
 Universidad de Antioquia - Termodinámica Química
 Separación de Benceno, Etilbenceno y 1,4-Dietilbenceno
 
+INCLUYE: Flash Adiabático con Balance de Energía Completo
 Desarrollado por: David
 Curso: Termodinámica Química
 """
 
 import numpy as np
-from scipy.optimize import brentq
+from scipy.optimize import brentq, fsolve
 
 # ============================================================================
 # CONSTANTES Y PROPIEDADES TERMODINÁMICAS
@@ -21,6 +22,30 @@ Antoine_params = {
     "Ethylbenzene": {"A": 36.2, "B": -3340.2, "C": -9.797},
     "1,4-Diethylbenzene": {"A": -2.4793, "B": -2894.2, "C": 6.7988}
 }
+
+# Capacidades caloríficas líquido (J/mol-K)
+Cp_liquid = {
+    "Benzene": 134.63,
+    "Ethylbenzene": 185.572,
+    "1,4-Diethylbenzene": 239.10
+}
+
+# Capacidades caloríficas vapor (J/mol-K)
+Cp_vapor = {
+    "Benzene": 82.44,
+    "Ethylbenzene": 127.40,
+    "1,4-Diethylbenzene": 176.15
+}
+
+# Calores de vaporización a Tref (J/mol)
+DHvap = {
+    "Benzene": 33900.0,
+    "Ethylbenzene": 41000.0,
+    "1,4-Diethylbenzene": 52500.0
+}
+
+# Temperatura de referencia (K)
+T_ref = 298.15  # 25°C
 
 # Parámetros UNIFAC
 UNIFAC = {
@@ -251,15 +276,190 @@ def bubble_temperature(P_kPa, x, T_init=None):
     return T, y
 
 
-def flash_isotermico(F_total, z, T_K, P_kPa):
-    """Realiza un flash isotérmico"""
+# ============================================================================
+# FUNCIONES DE ENTALPÍA (NUEVAS)
+# ============================================================================
+
+def enthalpy_liquid(T_K, composition):
+    """
+    Calcula la entalpía específica de una mezcla líquida (J/mol)
+    Estado de referencia: líquido puro a T_ref = 298.15 K
     
-    z = np.array(z)
-    z = np.maximum(z, 1e-10)
+    H_L = Σ(x_i * Cp_liquid_i * (T - T_ref))
+    """
+    H = 0.0
+    for i, comp in enumerate(components):
+        H += composition[i] * Cp_liquid[comp] * (T_K - T_ref)
+    
+    return H
+
+
+def enthalpy_vapor(T_K, composition):
+    """
+    Calcula la entalpía específica de una mezcla vapor (J/mol)
+    Estado de referencia: líquido puro a T_ref = 298.15 K
+    
+    H_V = Σ(y_i * [DHvap_i + Cp_vapor_i * (T - T_ref)])
+    """
+    H = 0.0
+    for i, comp in enumerate(components):
+        # Calor de vaporización + calor sensible del vapor
+        H += composition[i] * (DHvap[comp] + Cp_vapor[comp] * (T_K - T_ref))
+    
+    return H
+
+
+def enthalpy_stream(n_mol, composition, T_K, phase):
+    """
+    Calcula la entalpía total de una corriente (J/h)
+    
+    Parámetros:
+    -----------
+    n_mol: Flujo molar (kmol/h)
+    composition: Composición (fracción molar)
+    T_K: Temperatura (K)
+    phase: "liquid" o "vapor"
+    
+    Retorna:
+    --------
+    H_total: Entalpía total en J/h
+    """
+    if n_mol <= 0:
+        return 0.0
+    
+    # Convertir kmol/h a mol/h
+    n_mol_h = n_mol * 1000.0
+    
+    if phase == "liquid":
+        h_spec = enthalpy_liquid(T_K, composition)
+    elif phase == "vapor":
+        h_spec = enthalpy_vapor(T_K, composition)
+    else:
+        raise ValueError("phase debe ser 'liquid' o 'vapor'")
+    
+    H_total = n_mol_h * h_spec
+    
+    return H_total
+
+
+# ============================================================================
+# FLASH ADIABÁTICO (NUEVA IMPLEMENTACIÓN)
+# ============================================================================
+
+def flash_adiabatico(L_in, x_in, T_L_in, V_in, y_in, T_V_in, P_kPa):
+    """
+    Realiza un flash adiabático completo con balance de materia y energía
+    
+    Parámetros:
+    -----------
+    L_in: Flujo molar líquido entrante (kmol/h)
+    x_in: Composición líquida entrante
+    T_L_in: Temperatura líquido entrante (K)
+    V_in: Flujo molar vapor entrante (kmol/h)
+    y_in: Composición vapor entrante
+    T_V_in: Temperatura vapor entrante (K)
+    P_kPa: Presión de operación (kPa)
+    
+    Retorna:
+    --------
+    L_out, x_out, V_out, y_out, T_out
+    """
+    
+    # Normalizar composiciones
+    x_in = np.array(x_in)
+    x_in = np.maximum(x_in, 1e-10)
+    x_in = x_in / np.sum(x_in)
+    
+    y_in = np.array(y_in)
+    y_in = np.maximum(y_in, 1e-10)
+    y_in = y_in / np.sum(y_in)
+    
+    # Balance de masa total y por componente
+    F_total = L_in + V_in
+    
+    if F_total < 1e-6:
+        return 0.0, x_in, 0.0, y_in, T_L_in
+    
+    z = (L_in * x_in + V_in * y_in) / F_total
     z = z / np.sum(z)
     
-    T_C = T_K - 273.15
-    gamma = calculate_UNIFAC_gamma(T_K, z)
+    # Calcular entalpía de entrada (J/h)
+    H_in = enthalpy_stream(L_in, x_in, T_L_in, "liquid")
+    H_in += enthalpy_stream(V_in, y_in, T_V_in, "vapor")
+    
+    # Temperatura inicial de salida (promedio ponderado)
+    if L_in + V_in > 0:
+        T_out_guess = (L_in * T_L_in + V_in * T_V_in) / (L_in + V_in)
+    else:
+        T_out_guess = T_L_in
+    
+    # Función objetivo: balance de energía
+    def energy_balance(T_out):
+        """
+        Resuelve el equilibrio a T_out y calcula error en balance de energía
+        """
+        if T_out < 250 or T_out > 650:
+            return 1e10
+        
+        T_C = T_out - 273.15
+        
+        # Calcular K-values
+        try:
+            gamma = calculate_UNIFAC_gamma(T_out, z)
+            P_sat = np.array([antoine_pressure(T_C, comp) for comp in components])
+            P_sat = np.maximum(P_sat, 1e-10)
+            K = gamma * P_sat / P_kPa
+        except:
+            return 1e10
+        
+        # Resolver Rachford-Rice para beta
+        def rachford_rice(beta):
+            if beta <= 0 or beta >= 1:
+                return 1e10
+            return np.sum(z * (K - 1) / (1 + beta * (K - 1)))
+        
+        try:
+            beta = brentq(rachford_rice, 0.001, 0.999)
+        except:
+            beta = 0.5
+        
+        # Composiciones de salida
+        x_out = z / (1 + beta * (K - 1))
+        x_out = np.maximum(x_out, 1e-10)
+        x_out = x_out / np.sum(x_out)
+        
+        y_out = K * x_out
+        y_out = np.maximum(y_out, 1e-10)
+        y_out = y_out / np.sum(y_out)
+        
+        # Flujos de salida
+        L_out = F_total * (1 - beta)
+        V_out = F_total * beta
+        
+        # Entalpía de salida
+        H_out = enthalpy_stream(L_out, x_out, T_out, "liquid")
+        H_out += enthalpy_stream(V_out, y_out, T_out, "vapor")
+        
+        # Error en balance de energía
+        error = H_in - H_out
+        
+        return error
+    
+    # Resolver para T_out que satisface balance de energía
+    try:
+        # Buscar temperatura usando método de bisección/Newton
+        T_out = fsolve(energy_balance, T_out_guess, full_output=False)[0]
+        
+        # Limitar temperatura a rangos razonables
+        T_out = np.clip(T_out, 250, 650)
+        
+    except:
+        # Si falla, usar temperatura estimada
+        T_out = T_out_guess
+    
+    # Calcular composiciones finales a T_out
+    T_C = T_out - 273.15
+    gamma = calculate_UNIFAC_gamma(T_out, z)
     P_sat = np.array([antoine_pressure(T_C, comp) for comp in components])
     P_sat = np.maximum(P_sat, 1e-10)
     K = gamma * P_sat / P_kPa
@@ -269,25 +469,23 @@ def flash_isotermico(F_total, z, T_K, P_kPa):
             return 1e10
         return np.sum(z * (K - 1) / (1 + beta * (K - 1)))
     
-    beta_min, beta_max = 0.001, 0.999
-    
     try:
-        beta = brentq(rachford_rice, beta_min, beta_max)
+        beta = brentq(rachford_rice, 0.001, 0.999)
     except:
         beta = 0.5
     
-    x = z / (1 + beta * (K - 1))
-    x = np.maximum(x, 1e-10)
-    x = x / np.sum(x)
+    x_out = z / (1 + beta * (K - 1))
+    x_out = np.maximum(x_out, 1e-10)
+    x_out = x_out / np.sum(x_out)
     
-    y = K * x
-    y = np.maximum(y, 1e-10)
-    y = y / np.sum(y)
+    y_out = K * x_out
+    y_out = np.maximum(y_out, 1e-10)
+    y_out = y_out / np.sum(y_out)
     
-    L = F_total * (1 - beta)
-    V = F_total * beta
+    L_out = F_total * (1 - beta)
+    V_out = F_total * beta
     
-    return L, x, V, y, beta
+    return L_out, x_out, V_out, y_out, T_out
 
 
 # ============================================================================
@@ -299,6 +497,7 @@ def simular_columna_destilacion():
     
     print("=" * 80)
     print("SIMULACIÓN DE COLUMNA DE DESTILACIÓN - MÉTODO UNIFAC")
+    print("CON FLASH ADIABÁTICO Y BALANCE DE ENERGÍA COMPLETO")
     print("Sistema: Benceno - Etilbenceno - 1,4-Dietilbenceno")
     print("=" * 80)
     
@@ -376,7 +575,7 @@ def simular_columna_destilacion():
     x_stages[0] = x_L1
     
     # ITERACIÓN PRINCIPAL
-    print("\nINICIANDO ITERACIONES...")
+    print("\nINICIANDO ITERACIONES (con flash adiabático)...")
     
     max_iterations = 50
     tolerance = 1.0
@@ -385,62 +584,73 @@ def simular_columna_destilacion():
         
         T_stages_old = T_stages.copy()
         
-        # PASOS 9-11: Etapas antes de alimentación
+        # PASOS 9-11: Etapas antes de alimentación (CON FLASH ADIABÁTICO)
         for stage in range(1, feed_stage - 1):
             L_in = L_stages[stage - 1]
             x_in = x_stages[stage - 1]
             V_in = V_stages[min(stage + 1, n_stages - 1)]
             y_in = y_stages[min(stage + 1, n_stages - 1)]
             
-            F_total_stage = L_in + V_in
-            z_stage = (L_in * x_in + V_in * y_in) / F_total_stage if F_total_stage > 0 else x_in
+            T_L_in = T_stages[stage - 1]
+            T_V_in = T_stages[min(stage + 1, n_stages - 1)]
             
-            L_out, x_out, V_out, y_out, beta = flash_isotermico(
-                F_total_stage, z_stage, T_stages[stage], P_stages[stage]
+            # FLASH ADIABÁTICO con balance de energía
+            L_out, x_out, V_out, y_out, T_out = flash_adiabatico(
+                L_in, x_in, T_L_in, V_in, y_in, T_V_in, P_stages[stage]
             )
             
             L_stages[stage] = L_out
             x_stages[stage] = x_out
             V_stages[stage] = V_out
             y_stages[stage] = y_out
+            T_stages[stage] = T_out
         
-        # PASO 12: Etapa de alimentación
+        # PASO 12: Etapa de alimentación (CON FLASH ADIABÁTICO)
         stage = feed_stage - 1
         L_in = L_stages[stage - 1]
         x_in = x_stages[stage - 1]
         V_in = V_stages[min(stage + 1, n_stages - 1)]
         y_in = y_stages[min(stage + 1, n_stages - 1)]
         
-        F_total_stage = L_in + V_in + F_total
-        z_stage = (L_in * x_in + V_in * y_in + F_total * z_F) / F_total_stage
+        T_L_in = T_stages[stage - 1]
+        T_V_in = T_stages[min(stage + 1, n_stages - 1)]
         
-        L_out, x_out, V_out, y_out, beta = flash_isotermico(
-            F_total_stage, z_stage, T_stages[stage], P_stages[stage]
+        # Agregar alimentación mezclando corrientes
+        L_total_mixed = L_in + F_total  # Asumiendo alimentación líquida
+        x_mixed = (L_in * x_in + F_total * z_F) / L_total_mixed
+        T_L_mixed = (L_in * T_L_in + F_total * T_F) / L_total_mixed
+        
+        # FLASH ADIABÁTICO
+        L_out, x_out, V_out, y_out, T_out = flash_adiabatico(
+            L_total_mixed, x_mixed, T_L_mixed, V_in, y_in, T_V_in, P_stages[stage]
         )
         
         L_stages[stage] = L_out
         x_stages[stage] = x_out
         V_stages[stage] = V_out
         y_stages[stage] = y_out
+        T_stages[stage] = T_out
         
-        # PASO 13: Etapas después de alimentación
+        # PASO 13: Etapas después de alimentación (CON FLASH ADIABÁTICO)
         for stage in range(feed_stage, n_stages - 1):
             L_in = L_stages[stage - 1]
             x_in = x_stages[stage - 1]
             V_in = V_stages[min(stage + 1, n_stages - 1)] if stage < n_stages - 1 else 0
             y_in = y_stages[min(stage + 1, n_stages - 1)] if stage < n_stages - 1 else y_reboiler
             
-            F_total_stage = L_in + V_in
-            z_stage = (L_in * x_in + V_in * y_in) / F_total_stage if F_total_stage > 0 else x_in
+            T_L_in = T_stages[stage - 1]
+            T_V_in = T_stages[min(stage + 1, n_stages - 1)] if stage < n_stages - 1 else T_reboiler
             
-            L_out, x_out, V_out, y_out, beta = flash_isotermico(
-                F_total_stage, z_stage, T_stages[stage], P_stages[stage]
+            # FLASH ADIABÁTICO
+            L_out, x_out, V_out, y_out, T_out = flash_adiabatico(
+                L_in, x_in, T_L_in, V_in, y_in, T_V_in, P_stages[stage]
             )
             
             L_stages[stage] = L_out
             x_stages[stage] = x_out
             V_stages[stage] = V_out
             y_stages[stage] = y_out
+            T_stages[stage] = T_out
         
         # PASO 14: Rehervidor
         stage = n_stages - 1
@@ -475,7 +685,7 @@ def simular_columna_destilacion():
     else:
         num_iteraciones = max_iterations
     
-# ========================================================================
+    # ========================================================================
     # RESULTADOS FINALES
     # ========================================================================
     
@@ -545,7 +755,7 @@ def simular_columna_destilacion():
     print(f"\nError relativo total: {error_pct_total:.6f}%")
     
     print("\n" + "=" * 80)
-    print("SIMULACIÓN COMPLETADA")
+    print("SIMULACIÓN COMPLETADA CON BALANCE DE ENERGÍA")
     print("=" * 80)
 
 
